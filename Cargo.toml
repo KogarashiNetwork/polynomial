@@ -4,7 +4,7 @@ authors = [
     'KiriosK<KiriosK@yandex.ru>'
 ]
 name = "poly-commit"
-description = 'lifted elgamal encryption implementation'
+description = 'polynomial commitment implementation'
 version = "0.0.10"
 edition = "2021"
 license = "Apache-2.0"
