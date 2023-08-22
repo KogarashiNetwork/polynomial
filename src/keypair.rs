@@ -1,13 +1,13 @@
 use crate::commitment::Commitment;
-use crate::poly::Polynomial;
+use crate::poly::Coefficients;
 use crate::util;
 use crate::witness::Witness;
-use ec_pairing::msm_variable_base;
+use ec_pairing::msm_curve_addtion;
 use parity_scale_codec::{Decode, Encode};
 use zkstd::behave::*;
 use zkstd::common::*;
 
-// key pair structure
+/// Kate polynomial commitment params used for prover polynomial domain and proof verification
 #[derive(Clone, Debug, PartialEq, Decode, Encode)]
 #[allow(dead_code)]
 pub struct KeyPair<P: Pairing> {
@@ -38,16 +38,19 @@ impl<P: Pairing> KeyPair<P> {
     }
 
     // commit polynomial to g1 projective group
-    pub fn commit(&self, poly: &Polynomial<P::ScalarField>) -> Result<Commitment<P>, Error> {
+    pub fn commit(
+        &self,
+        poly: &Coefficients<P::ScalarField>,
+    ) -> Result<Commitment<P::G1Affine>, Error> {
         self.check_commit_degree_is_within_bounds(poly.degree())?;
 
-        Ok(Commitment::new(msm_variable_base::<P>(&self.g1, poly)))
+        Ok(Commitment::new(msm_curve_addtion::<P>(&self.g1, &poly.0)))
     }
 
     fn check_commit_degree_is_within_bounds(&self, poly_degree: usize) -> Result<(), Error> {
         match (poly_degree == 0, poly_degree > self.max_degree()) {
-            (true, _) => Err(Error::PolynomialDegreeIsZero),
-            (false, true) => Err(Error::PolynomialDegreeTooLarge),
+            (true, _) => Err(Error::CoefficientsDegreeIsZero),
+            (false, true) => Err(Error::CoefficientsDegreeTooLarge),
             (false, false) => Ok(()),
         }
     }
@@ -88,7 +91,7 @@ impl<P: Pairing> KeyPair<P> {
     // create witness for f(a)
     pub fn create_witness(
         &self,
-        poly: &Polynomial<P::ScalarField>,
+        poly: &Coefficients<P::ScalarField>,
         at: P::ScalarField,
     ) -> Witness<P> {
         // p(x) - p(at) / x - at
@@ -119,15 +122,15 @@ impl<P: Pairing> KeyPair<P> {
     /// computing each witness; removing f(z).
     pub fn compute_aggregate_witness(
         &self,
-        polynomials: &[Polynomial<P::ScalarField>],
+        polynomials: &[Coefficients<P::ScalarField>],
         point: &P::ScalarField,
         v_challenge: &P::ScalarField,
-    ) -> Polynomial<P::ScalarField> {
-        let powers = util::powers_of::<P>(v_challenge, polynomials.len() - 1);
+    ) -> Coefficients<P::ScalarField> {
+        let powers = util::powers_of(v_challenge, polynomials.len() - 1);
 
         assert_eq!(powers.len(), polynomials.len());
 
-        let numerator: Polynomial<P::ScalarField> = polynomials
+        let numerator: Coefficients<P::ScalarField> = polynomials
             .iter()
             .zip(powers.iter())
             .map(|(poly, v_challenge)| poly * v_challenge)
@@ -139,6 +142,6 @@ impl<P: Pairing> KeyPair<P> {
 
 #[derive(Debug)]
 pub enum Error {
-    PolynomialDegreeIsZero,
-    PolynomialDegreeTooLarge,
+    CoefficientsDegreeIsZero,
+    CoefficientsDegreeTooLarge,
 }
