@@ -16,9 +16,9 @@ checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 
 [[package]]
 name = "bls-12-381"
-version = "0.0.12"
+version = "0.0.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a7566e94a7e3e480f27375ffaf4da3b993927581e71cfd9f55be25e4c89b07f"
+checksum = "d7147216e291580c0aa98fb3815be36b007f3e4fb8602aff5244c3c2f7abd498"
 dependencies = [
  "parity-scale-codec",
  "rand_core",
@@ -83,9 +83,9 @@ dependencies = [
 
 [[package]]
 name = "ec-pairing"
-version = "0.0.11"
+version = "0.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0938911d9b1263b0037208e51a1168ea8e1cb5fc29ff1b0a814f1c51ed25fbc"
+checksum = "f994ac658de6511a2fd8b06acb772deee93f6b51b06c1b4fa1bed3f5d5765164"
 dependencies = [
  "bls-12-381",
  "jub-jub",
@@ -151,9 +151,9 @@ dependencies = [
 
 [[package]]
 name = "jub-jub"
-version = "0.0.14"
+version = "0.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9594dcd111e9610a2b4f36a9c52ae30c6c02542e69505ecdedb9c4dc26289517"
+checksum = "3ca3db25ae4463e54544cf310ca05c261b506a909074c56c0814766803d321a8"
 dependencies = [
  "bls-12-381",
  "parity-scale-codec",
@@ -231,7 +231,7 @@ checksum = "de3145af08024dea9fa9914f381a17b8fc6034dfb00f3a84013f7ff43f29ed4c"
 
 [[package]]
 name = "poly-commit"
-version = "0.0.11"
+version = "0.0.12"
 dependencies = [
  "bls-12-381",
  "ec-pairing",
@@ -394,12 +394,13 @@ dependencies = [
 
 [[package]]
 name = "zkstd"
-version = "0.0.12"
+version = "0.0.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1723ddf295d3f38212b6c94efafedf801fc780781b1f3659b47c3c1fa4f0a7e3"
+checksum = "bbd4342c4836fe3a4d24ad59cc483f25538a42705102ad3a088bcd3f148d4357"
 dependencies = [
  "parity-scale-codec",
  "paste",
  "rand_core",
+ "serde",
  "sp-std",
 ]

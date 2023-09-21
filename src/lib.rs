@@ -18,15 +18,17 @@
 
 mod commitment;
 mod fft;
-mod keypair;
+mod kzg;
+mod msm;
 mod poly;
 mod util;
 mod witness;
 
 pub use commitment::Commitment;
 pub use fft::Fft;
-pub use keypair::Error as KzgError;
-pub use keypair::KeyPair;
+pub use kzg::Error as KzgError;
+pub use kzg::{EvaluationKey, KzgParams, Proof};
+pub use msm::msm_curve_addtion;
 pub use poly::{Coefficients, PointsValue};
 pub use util::{batch_inversion, powers_of};
 pub use witness::Witness;
