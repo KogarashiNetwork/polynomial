@@ -30,7 +30,7 @@ impl<F: FftField> Fft<F> {
     pub fn new(k: usize) -> Self {
         assert!(k >= 1);
         let n = 1 << k;
-        let half_n = n / 2;
+        let half_n = n >> 1;
         let offset = 64 - k;
 
         // precompute twiddle factors
@@ -55,7 +55,7 @@ impl<F: FftField> Fft<F> {
 
         // precompute cosets
         let mul_g = F::MULTIPLICATIVE_GENERATOR;
-        let cosets = (0..half_n)
+        let cosets = (0..n)
             .scan(F::one(), |w, _| {
                 let tw = *w;
                 *w *= mul_g;
@@ -88,7 +88,7 @@ impl<F: FftField> Fft<F> {
             })
             .collect::<Vec<_>>();
 
-        Fft {
+        Self {
             n,
             twiddle_factors,
             inv_twiddle_factors,
@@ -121,20 +121,24 @@ impl<F: FftField> Fft<F> {
     }
 
     /// perform discrete fourier transform
-    pub fn dft(&self, coeffs: &mut Coefficients<F>) {
-        self.prepare_fft(coeffs);
-        classic_fft_arithmetic(&mut coeffs.0, self.n, 1, &self.twiddle_factors)
+    pub fn dft(&self, coeffs: Coefficients<F>) -> PointsValue<F> {
+        let mut evals = coeffs.0;
+        self.prepare_fft(&mut evals);
+        classic_fft_arithmetic(&mut evals, self.n, 1, &self.twiddle_factors);
+        PointsValue::new(evals.clone())
     }
 
     /// perform classic inverse discrete fourier transform
-    pub fn idft(&self, coeffs: &mut Coefficients<F>) {
-        self.prepare_fft(coeffs);
-        classic_fft_arithmetic(&mut coeffs.0, self.n, 1, &self.inv_twiddle_factors);
-        coeffs.0.iter_mut().for_each(|coeff| *coeff *= self.n_inv)
+    pub fn idft(&self, points: PointsValue<F>) -> Coefficients<F> {
+        let mut coeffs = points.0;
+        self.prepare_fft(&mut coeffs);
+        classic_fft_arithmetic(&mut coeffs, self.n, 1, &self.inv_twiddle_factors);
+        coeffs.iter_mut().for_each(|coeff| *coeff *= self.n_inv);
+        Coefficients::new(coeffs.clone())
     }
 
     /// perform discrete fourier transform on coset
-    pub fn coset_dft(&self, coeffs: &mut Coefficients<F>) {
+    pub fn coset_dft(&self, mut coeffs: Coefficients<F>) -> PointsValue<F> {
         coeffs
             .0
             .iter_mut()
@@ -144,39 +148,65 @@ impl<F: FftField> Fft<F> {
     }
 
     /// perform discrete fourier transform on coset
-    pub fn coset_idft(&self, coeffs: &mut Coefficients<F>) {
-        self.idft(coeffs);
-        coeffs
+    pub fn coset_idft(&self, points: PointsValue<F>) -> Coefficients<F> {
+        let mut points = self.idft(points);
+        points
             .0
             .iter_mut()
             .zip(self.inv_cosets.iter())
-            .for_each(|(coeff, inv_coset)| *coeff *= *inv_coset)
+            .for_each(|(coeff, inv_coset)| *coeff *= *inv_coset);
+        Coefficients::new(points.0)
+    }
+
+    /// This evaluates t(tau) for this domain, which is
+    /// tau^m - 1 for these radix-2 domains.
+    pub fn z(&self, tau: &F) -> F {
+        let mut tmp = tau.pow(self.n as u64);
+        tmp.sub_assign(&F::one());
+
+        tmp
+    }
+
+    /// This evaluates t(tau) for this domain, which is
+    /// tau^m - 1 for these radix-2 domains.
+    pub fn z_on_coset(&self) -> F {
+        let mut tmp = F::MULTIPLICATIVE_GENERATOR.pow(self.n as u64);
+        tmp.sub_assign(&F::one());
+
+        tmp
+    }
+
+    /// The target polynomial is the zero polynomial in our
+    /// evaluation domain, so we must perform division over
+    /// a coset.
+    pub fn divide_by_z_on_coset(&self, points: PointsValue<F>) -> PointsValue<F> {
+        let i = self.z_on_coset().invert().unwrap();
+
+        PointsValue(points.0.into_iter().map(|v| v * i).collect())
     }
 
     /// resize polynomial and bit reverse swap
-    fn prepare_fft(&self, coeffs: &mut Coefficients<F>) {
-        coeffs.0.resize(self.n, F::zero());
+    fn prepare_fft(&self, coeffs: &mut Vec<F>) {
+        coeffs.resize(self.n, F::zero());
         self.bit_reverse
             .iter()
-            .for_each(|(i, ri)| coeffs.0.swap(*ri, *i));
+            .for_each(|(i, ri)| coeffs.swap(*ri, *i));
     }
 
     /// polynomial multiplication
-    pub fn poly_mul(&self, mut rhs: Coefficients<F>, mut lhs: Coefficients<F>) -> Coefficients<F> {
-        self.dft(&mut rhs);
-        self.dft(&mut lhs);
-        let mut mul_poly = Coefficients::new(
+    pub fn poly_mul(&self, rhs: Coefficients<F>, lhs: Coefficients<F>) -> Coefficients<F> {
+        let rhs = self.dft(rhs);
+        let lhs = self.dft(lhs);
+        let mul_poly = PointsValue::new(
             rhs.0
                 .iter()
                 .zip(lhs.0.iter())
                 .map(|(a, b)| *a * *b)
                 .collect(),
         );
-        self.idft(&mut mul_poly);
-        mul_poly
+        self.idft(mul_poly)
     }
 
-    #[allow(clippy::needless_range_loop)]
     /// Evaluate all the lagrange polynomials defined by this domain at the
     /// point `tau`.
     pub fn evaluate_all_lagrange_coefficients(&self, tau: F) -> Vec<F> {
@@ -187,9 +217,9 @@ impl<F: FftField> Fft<F> {
         if t_size == F::one() {
             let mut u = vec![F::zero(); size];
             let mut omega_i = one;
-            for i in 0..size {
+            for x in u.iter_mut().take(size) {
                 if omega_i == tau {
-                    u[i] = one;
+                    *x = one;
                     break;
                 }
                 omega_i *= &self.generator();
@@ -209,11 +239,10 @@ impl<F: FftField> Fft<F> {
 
             batch_inversion(u.as_mut_slice());
 
-            u.iter_mut().zip(ls).for_each(|(tau_minus_r, l)| {
-                *tau_minus_r = l * *tau_minus_r;
-            });
-
-            u
+            u.iter()
+                .zip(ls)
+                .map(|(tau_minus_r, l)| l * *tau_minus_r)
+                .collect()
         }
     }
 
@@ -295,8 +324,8 @@ mod tests {
     use super::Fft;
     use bls_12_381::Fr;
     use rand_core::OsRng;
-    use zkstd::behave::{Group, PrimeField};
     use zkstd::common::Vec;
+    use zkstd::common::{Group, PrimeField};
 
     fn arb_poly(k: u32) -> Vec<Fr> {
         (0..(1 << k))
@@ -315,25 +344,15 @@ mod tests {
         c
     }
 
-    fn point_mutiply<F: PrimeField>(a: Coefficients<F>, b: Coefficients<F>) -> Coefficients<F> {
-        assert_eq!(a.0.len(), b.0.len());
-        Coefficients(
-            a.0.iter()
-                .zip(b.0.iter())
-                .map(|(coeff_a, coeff_b)| *coeff_a * *coeff_b)
-                .collect::<Vec<F>>(),
-        )
-    }
-
     #[test]
     fn fft_transformation_test() {
         let coeffs = arb_poly(10);
-        let mut poly_a = Coefficients(coeffs);
+        let poly_a = Coefficients(coeffs);
         let poly_b = poly_a.clone();
         let classic_fft = Fft::new(10);
 
-        classic_fft.dft(&mut poly_a);
-        classic_fft.idft(&mut poly_a);
+        let evals_a = classic_fft.dft(poly_a);
+        let poly_a = classic_fft.idft(evals_a);
 
         assert_eq!(poly_a, poly_b)
     }
@@ -345,17 +364,17 @@ mod tests {
         let fft = Fft::new(5);
         let poly_c = coeffs_a.clone();
         let poly_d = coeffs_b.clone();
-        let mut poly_a = Coefficients(coeffs_a);
-        let mut poly_b = Coefficients(coeffs_b);
+        let poly_a = Coefficients(coeffs_a);
+        let poly_b = Coefficients(coeffs_b);
         let poly_g = poly_a.clone();
         let poly_h = poly_b.clone();
 
-        let poly_e = Coefficients(naive_multiply(poly_c, poly_d));
+        let poly_e = Coefficients::new(naive_multiply(poly_c, poly_d));
 
-        fft.dft(&mut poly_a);
-        fft.dft(&mut poly_b);
-        let mut poly_f = point_mutiply(poly_a, poly_b);
-        fft.idft(&mut poly_f);
+        let evals_a = fft.dft(poly_a);
+        let evals_b = fft.dft(poly_b);
+        let poly_f = &evals_a * &evals_b;
+        let poly_f = fft.idft(poly_f);
 
         let poly_i = fft.poly_mul(poly_g, poly_h);
 

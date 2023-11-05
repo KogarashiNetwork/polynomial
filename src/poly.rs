@@ -12,13 +12,6 @@ pub struct Coefficients<F: PrimeField>(pub Vec<F>);
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PointsValue<F: PrimeField>(pub Vec<F>);
 
-pub struct Witness<F> {
-    s_eval: F,
-    a_eval: F,
-    q_eval: F,
-    denominator: F,
-}
-
 impl<F: PrimeField> Deref for Coefficients<F> {
     type Target = [F];
 
@@ -46,11 +39,7 @@ impl<F: FftField> Sum for Coefficients<F> {
     where
         I: Iterator<Item = Self>,
     {
-        let sum: Coefficients<F> = iter.fold(Coefficients::default(), |mut res, val| {
-            res = &res + &val;
-            res
-        });
-        sum
+        iter.fold(Coefficients::default(), |res, val| &res + &val)
     }
 }
 
@@ -58,42 +47,18 @@ impl<F: FftField> PointsValue<F> {
     pub fn new(coeffs: Vec<F>) -> Self {
         Self(coeffs)
     }
+
+    pub fn format_degree(mut self) -> Self {
+        while self.0.last().map_or(false, |c| c == &F::zero()) {
+            self.0.pop();
+        }
+        self
+    }
 }
 
 impl<F: FftField> Coefficients<F> {
     pub fn new(coeffs: Vec<F>) -> Self {
-        Self(coeffs)
-    }
-
-    #[allow(clippy::needless_borrow)]
-    pub fn rand<R: RngCore>(d: usize, mut rng: &mut R) -> Self {
-        let mut random_coeffs = Vec::with_capacity(d + 1);
-        for _ in 0..=d {
-            random_coeffs.push(F::random(&mut rng));
-        }
-        Self::from_vec(random_coeffs)
-    }
-
-    /// Constructs a new polynomial from a list of coefficients.
-    ///
-    /// # Panics
-    /// When the length of the coeffs is zero.
-    pub fn from_vec(coeffs: Vec<F>) -> Self {
-        let mut result = Self(coeffs);
-        // While there are zeros at the end of the coefficient vector, pop them
-        // off.
-        result.truncate_leading_zeros();
-        // Check that either the coefficients vec is empty or that the last
-        // coeff is non-zero.
-        assert!(result.0.last().map_or(true, |coeff| coeff != &F::zero()));
-
-        result
-    }
-
-    fn truncate_leading_zeros(&mut self) {
-        while self.0.last().map_or(false, |c| c == &F::zero()) {
-            self.0.pop();
-        }
+        Self(coeffs).format_degree()
     }
 
     // polynomial evaluation domain
@@ -154,7 +119,17 @@ impl<F: FftField> Coefficients<F> {
         tau.pow(n) - F::one()
     }
 
-    fn format_degree(mut self) -> Self {
+    /// if hiding degree = 1: (b2*X^(n+1) + b1*X^n - b2*X - b1) + witnesses
+    /// if hiding degree = 2: (b3*X^(n+2) + b2*X^(n+1) + b1*X^n - b3*X^2 - b2*X
+    pub fn blind<R: RngCore>(&mut self, hiding_degree: usize, rng: &mut R) {
+        for i in 0..hiding_degree + 1 {
+            let blinding_scalar = F::random(&mut *rng);
+            self.0[i] -= blinding_scalar;
+            self.0.push(blinding_scalar);
+        }
+    }
+
+    pub fn format_degree(mut self) -> Self {
         while self.0.last().map_or(false, |c| c == &F::zero()) {
             self.0.pop();
         }
@@ -173,27 +148,6 @@ impl<F: FftField> Coefficients<F> {
     pub(crate) fn is_zero(&self) -> bool {
         self.0.is_empty() || self.0.iter().all(|coeff| coeff == &F::zero())
     }
-
-    // create witness for f(a)
-    pub fn create_witness(self, at: &F, s: &F, domain: Vec<F>) -> Witness<F> {
-        // p(x) - p(at) / x - at
-        let quotient = self.divide(at);
-        // p(s)
-        let s_eval = self.commit(&domain);
-        // p(at)
-        let a_eval = self.evaluate(at);
-        // p(s) - p(at) / s - at
-        let q_eval = quotient.evaluate(s);
-        // s - at
-        let denominator = *s - *at;
-
-        Witness {
-            s_eval,
-            a_eval,
-            q_eval,
-            denominator,
-        }
-    }
 }
 
 impl<F: FftField> Add for Coefficients<F> {
@@ -206,7 +160,36 @@ impl<F: FftField> Add for Coefficients<F> {
         } else {
             (rhs.0.iter(), self.0.iter().chain(iter::repeat(&zero)))
         };
-        Self(left.zip(right).map(|(a, b)| *a + *b).collect()).format_degree()
+        Self::new(left.zip(right).map(|(a, b)| *a + *b).collect())
+    }
+}
+
+impl<'a, 'b, F: FftField> Sub<&'a PointsValue<F>> for &'b PointsValue<F> {
+    type Output = PointsValue<F>;
+
+    fn sub(self, rhs: &'a PointsValue<F>) -> Self::Output {
+        let zero = F::zero();
+        PointsValue::new(if self.0.len() > rhs.0.len() {
+            let (left, right) = (self.0.iter(), rhs.0.iter().chain(iter::repeat(&zero)));
+            left.zip(right).map(|(a, b)| *a - *b).collect()
+        } else {
+            let (left, right) = (self.0.iter().chain(iter::repeat(&zero)), rhs.0.iter());
+            left.zip(right).map(|(a, b)| *a - *b).collect()
+        })
+    }
+}
+
+impl<'a, 'b, F: FftField> Mul<&'a PointsValue<F>> for &'b PointsValue<F> {
+    type Output = PointsValue<F>;
+
+    fn mul(self, rhs: &'a PointsValue<F>) -> Self::Output {
+        let zero = F::zero();
+        let (left, right) = if self.0.len() > rhs.0.len() {
+            (self.0.iter(), rhs.0.iter().chain(iter::repeat(&zero)))
+        } else {
+            (rhs.0.iter(), self.0.iter().chain(iter::repeat(&zero)))
+        };
+        PointsValue::new(left.zip(right).map(|(a, b)| *a * *b).collect())
     }
 }
 
@@ -220,7 +203,7 @@ impl<'a, 'b, F: FftField> Add<&'a Coefficients<F>> for &'b Coefficients<F> {
         } else {
             (rhs.0.iter(), self.0.iter().chain(iter::repeat(&zero)))
         };
-        Coefficients(left.zip(right).map(|(a, b)| *a + *b).collect()).format_degree()
+        Coefficients::new(left.zip(right).map(|(a, b)| *a + *b).collect())
     }
 }
 
@@ -234,7 +217,7 @@ impl<F: FftField> Sub for Coefficients<F> {
         } else {
             (rhs.0.iter(), self.0.iter().chain(iter::repeat(&zero)))
         };
-        Self(left.zip(right).map(|(a, b)| *a - *b).collect()).format_degree()
+        Self::new(left.zip(right).map(|(a, b)| *a - *b).collect())
     }
 }
 
@@ -242,23 +225,18 @@ impl<'a, 'b, F: FftField> Mul<&'a F> for &'b Coefficients<F> {
     type Output = Coefficients<F>;
 
     fn mul(self, scalar: &'a F) -> Coefficients<F> {
-        Coefficients(self.0.iter().map(|coeff| *coeff * scalar).collect())
-    }
-}
-
-impl<F: FftField> Witness<F> {
-    // verify witness
-    pub fn verify_eval(self) -> bool {
-        self.q_eval * self.denominator == self.s_eval - self.a_eval
+        Coefficients::new(self.0.iter().map(|coeff| *coeff * scalar).collect())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::Coefficients;
+    use crate::PointsValue;
     use bls_12_381::Fr;
+    use core::iter;
     use rand_core::OsRng;
-    use zkstd::behave::{Group, PrimeField};
+    use zkstd::common::{Group, PrimeField};
 
     fn arb_fr() -> Fr {
         Fr::random(OsRng)
@@ -266,6 +244,14 @@ mod tests {
 
     fn arb_poly(k: u32) -> Coefficients<Fr> {
         Coefficients(
+            (0..(1 << k))
+                .map(|_| Fr::random(OsRng))
+                .collect::<Vec<Fr>>(),
+        )
+    }
+
+    fn arb_points(k: u32) -> PointsValue<Fr> {
+        PointsValue(
             (0..(1 << k))
                 .map(|_| Fr::random(OsRng))
                 .collect::<Vec<Fr>>(),
@@ -308,5 +294,27 @@ mod tests {
         let original = Coefficients(naive_multiply(quotient.0, factor_poly));
 
         assert_eq!(poly_a.0, original.0);
+    }
+
+    #[test]
+    fn polynomial_subtraction_test() {
+        let a = arb_points(9);
+        let b = arb_points(10);
+
+        let sub = &a - &b;
+
+        let ans: Vec<Fr> = if a.0.len() > b.0.len() {
+            a.0.iter()
+                .zip(b.0.iter().chain(iter::repeat(&Fr::zero())))
+                .map(|(a, b)| *a - *b)
+                .collect()
+        } else {
+            a.0.iter()
+                .chain(iter::repeat(&Fr::zero()))
+                .zip(b.0.iter())
+                .map(|(a, b)| *a - *b)
+                .collect()
+        };
+        assert_eq!(sub.0, ans);
     }
 }
